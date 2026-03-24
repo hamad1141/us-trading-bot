@@ -17,38 +17,46 @@ class OmniQuantumAlpha:
 
     async def get_stats(self):
         acc = self.api.get_account()
-        print("\n" + "="*50)
-        print(f" BINANCE STYLE MONITOR | {datetime.now().strftime('%H:%M:%S')}")
+        print("\n" + "="*60)
+        print(f" HYBRID ALPHA MONITOR | {datetime.now().strftime('%H:%M:%S')}")
         print(f" EQUITY: ${acc.equity} | BUYING POWER: ${acc.buying_power}")
-        print("="*50)
+        print("="*60)
 
-    async def run_optimized_scanner(self):
-        print(f"{'SYMBOL':<10} | {'PRICE':<10} | {'GAP %':<10} | {'STATUS'}")
-        print("-" * 50)
+    async def run_hybrid_scanner(self):
+        print(f"{'SYMBOL':<10} | {'PRICE':<10} | {'D-GAP%':<8} | {'1H-GAP%':<8} | {'STATUS'}")
+        print("-" * 65)
         
         assets = self.api.list_assets(status='active', asset_class='us_equity')
         watchlist = [a.symbol for a in assets if a.tradable and a.shortable][:self.scan_limit]
         
         try:
-            all_bars = self.api.get_bars(watchlist, '1Day', limit=2).df
+            all_daily_bars = self.api.get_bars(watchlist, '1Day', limit=2).df
+            all_hourly_bars = self.api.get_bars(watchlist, '1Hour', limit=1).df
             latest_quotes = self.api.get_latest_quotes(watchlist)
             
             for symbol in watchlist:
                 try:
-                    symbol_bars = all_bars[all_bars.index == symbol]
-                    if len(symbol_bars) < 2: continue
+                    d_bars = all_daily_bars[all_daily_bars.index == symbol]
+                    h_bars = all_hourly_bars[all_hourly_bars.index == symbol]
                     
-                    prev_close = symbol_bars['close'].iloc[-2]
+                    if len(d_bars) < 2 or h_bars.empty: continue
+                    
+                    prev_close = d_bars['close'].iloc[-2]
+                    hour_open = h_bars['open'].iloc[-1]
                     curr_price = latest_quotes[symbol].askprice
-                    gap_pct = ((curr_price - prev_close) / prev_close) * 100
                     
-                    # عرض الأسهم اللي انحرافها أكثر من 0.5% عشان تشوف الحركة
-                    if gap_pct >= 0.5:
-                        status = "🚀 TARGET!!" if gap_pct >= self.min_gap else "Watching"
-                        print(f"{symbol:<10} | ${curr_price:<9.2f} | {gap_pct:>6.2f}% | {status}")
+                    daily_gap = ((curr_price - prev_close) / prev_close) * 100
+                    hourly_gap = ((curr_price - hour_open) / hour_open) * 100
+                    
+                    # TRIGGER: Entry if Daily OR Hourly gap exceeds 4%
+                    is_target = daily_gap >= self.min_gap or hourly_gap >= self.min_gap
+                    
+                    if daily_gap >= 0.5 or hourly_gap >= 0.5:
+                        status = "!! EXECUTE !!" if is_target else "Monitoring"
+                        print(f"{symbol:<10} | ${curr_price:<9.2f} | {daily_gap:>7.2f}% | {hourly_gap:>7.2f}% | {status}")
 
-                    if gap_pct >= self.min_gap:
-                        await self.execute_trade(symbol, curr_price)
+                        if is_target:
+                            await self.execute_trade(symbol, curr_price)
                 except:
                     continue
         except Exception as e:
@@ -58,21 +66,20 @@ class OmniQuantumAlpha:
         acc = self.api.get_account()
         qty = (float(acc.cash) * self.risk_per_trade) // price
         if qty > 0:
-            print(f"\n>>> [ORDER] BUY {qty} {symbol} at ${price}")
+            print(f"\n>>> [GAP DETECTED] BUYING {symbol} | PRICE: ${price}")
             try:
                 self.api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc', extended_hours=True)
                 tp = price * (1 + self.min_profit)
                 self.api.submit_order(symbol=symbol, qty=qty, side='sell', type='limit', limit_price=tp, time_in_force='gtc', extended_hours=True)
-                print(f">>> [LOG] TAKE PROFIT SET: ${tp:.2f}\n")
+                print(f">>> [SUCCESS] TAKE PROFIT SET: ${tp:.2f}\n")
             except Exception as e:
                 print(f"Order Error: {e}")
 
     async def start(self):
-        print(">>> STARTING ULTRA-FAST AGGRESSIVE MODE...")
         while True:
             await self.get_stats()
-            await self.run_optimized_scanner()
-            await asyncio.sleep(10) 
+            await self.run_hybrid_scanner()
+            await asyncio.sleep(10)
 
 if __name__ == "__main__":
     bot = OmniQuantumAlpha()
