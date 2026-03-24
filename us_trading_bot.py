@@ -10,16 +10,16 @@ class OmniQuantumAlpha:
         self.base_url = "https://paper-api.alpaca.markets" 
         self.api = tradeapi.REST(self.api_key, self.secret_key, self.base_url, api_version='v2')
         
-        self.risk_per_trade = 0.20
-        self.min_gap = 4.0
-        self.min_profit = 0.015
+        self.risk_per_trade = 0.20 # Uses 20% of buying power per trade
+        self.min_gap = 4.0         # TRRIGERS BUY AT 4%
+        self.min_profit = 0.015    # SELLS AT 1.5% PROFIT
         self.scan_limit = 150 
 
     async def get_stats(self):
         acc = self.api.get_account()
         print("\n" + "="*60)
-        print(f" HYBRID ALPHA MONITOR | {datetime.now().strftime('%H:%M:%S')}")
-        print(f" EQUITY: ${acc.equity} | BUYING POWER: ${acc.buying_power}")
+        print(f" AGGRESSIVE GAP MONITOR | {datetime.now().strftime('%H:%M:%S')}")
+        print(f" EQUITY: ${acc.equity} | POWER: ${acc.buying_power}")
         print("="*60)
 
     async def run_hybrid_scanner(self):
@@ -45,14 +45,16 @@ class OmniQuantumAlpha:
                     hour_open = h_bars['open'].iloc[-1]
                     curr_price = latest_quotes[symbol].askprice
                     
+                    if curr_price == 0: continue
+
                     daily_gap = ((curr_price - prev_close) / prev_close) * 100
                     hourly_gap = ((curr_price - hour_open) / hour_open) * 100
                     
-                    # TRIGGER: Entry if Daily OR Hourly gap exceeds 4%
                     is_target = daily_gap >= self.min_gap or hourly_gap >= self.min_gap
                     
-                    if daily_gap >= 0.5 or hourly_gap >= 0.5:
-                        status = "!! EXECUTE !!" if is_target else "Monitoring"
+                    # VISUAL FILTER: Only show stocks with at least 2% gap (Getting close to 4%)
+                    if daily_gap >= 2.0 or hourly_gap >= 2.0:
+                        status = "!! EXECUTE !!" if is_target else "NEARING 4%"
                         print(f"{symbol:<10} | ${curr_price:<9.2f} | {daily_gap:>7.2f}% | {hourly_gap:>7.2f}% | {status}")
 
                         if is_target:
@@ -66,7 +68,7 @@ class OmniQuantumAlpha:
         acc = self.api.get_account()
         qty = (float(acc.cash) * self.risk_per_trade) // price
         if qty > 0:
-            print(f"\n>>> [GAP DETECTED] BUYING {symbol} | PRICE: ${price}")
+            print(f"\n>>> [HYBRID TRIGGER] BUYING {symbol} | PRICE: ${price}")
             try:
                 self.api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc', extended_hours=True)
                 tp = price * (1 + self.min_profit)
