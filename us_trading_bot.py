@@ -17,16 +17,19 @@ class OmniQuantumAlpha:
 
     async def get_stats(self):
         acc = self.api.get_account()
-        print(f"\n[VITAL SIGNS] Equity: ${acc.equity} | Power: ${acc.buying_power}")
-        print(f"Time: {datetime.now().strftime('%H:%M:%S')} | Status: ACTIVE")
+        print("\n" + "="*50)
+        print(f" BINANCE STYLE MONITOR | {datetime.now().strftime('%H:%M:%S')}")
+        print(f" EQUITY: ${acc.equity} | BUYING POWER: ${acc.buying_power}")
+        print("="*50)
 
     async def run_optimized_scanner(self):
-        print(f"--- [ULTRA-FAST SCAN: {self.scan_limit} ASSETS] ---")
+        print(f"{'SYMBOL':<10} | {'PRICE':<10} | {'GAP %':<10} | {'STATUS'}")
+        print("-" * 50)
+        
         assets = self.api.list_assets(status='active', asset_class='us_equity')
         watchlist = [a.symbol for a in assets if a.tradable and a.shortable][:self.scan_limit]
         
         try:
-            # BULK REQUEST: Fetch last 2 days of bars for ALL symbols at once
             all_bars = self.api.get_bars(watchlist, '1Day', limit=2).df
             latest_quotes = self.api.get_latest_quotes(watchlist)
             
@@ -39,39 +42,37 @@ class OmniQuantumAlpha:
                     curr_price = latest_quotes[symbol].askprice
                     gap_pct = ((curr_price - prev_close) / prev_close) * 100
                     
+                    # عرض الأسهم اللي انحرافها أكثر من 0.5% عشان تشوف الحركة
                     if gap_pct >= 0.5:
-                        status = "!! TARGET !!" if gap_pct >= self.min_gap else "[Monitoring]"
-                        print(f"S: {symbol:6} | Gap: {gap_pct:6.2f}% | {status}")
+                        status = "🚀 TARGET!!" if gap_pct >= self.min_gap else "Watching"
+                        print(f"{symbol:<10} | ${curr_price:<9.2f} | {gap_pct:>6.2f}% | {status}")
 
                     if gap_pct >= self.min_gap:
                         await self.execute_trade(symbol, curr_price)
                 except:
                     continue
         except Exception as e:
-            print(f"Optimized Scan Error: {e}")
+            print(f"Connection Error: {e}")
 
     async def execute_trade(self, symbol, price):
         acc = self.api.get_account()
-        cash = float(acc.cash)
-        qty = (cash * self.risk_per_trade) // price
+        qty = (float(acc.cash) * self.risk_per_trade) // price
         if qty > 0:
-            print("\n" + "*"*60)
-            print(f"[*] TRADE TRIGGERED: {symbol} | QTY: {qty} | PRICE: ${price}")
+            print(f"\n>>> [ORDER] BUY {qty} {symbol} at ${price}")
             try:
                 self.api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc', extended_hours=True)
                 tp = price * (1 + self.min_profit)
                 self.api.submit_order(symbol=symbol, qty=qty, side='sell', type='limit', limit_price=tp, time_in_force='gtc', extended_hours=True)
-                print(f"[SUCCESS] LIMIT ORDER SET AT: ${tp:.2f}")
-                print("*"*60 + "\n")
+                print(f">>> [LOG] TAKE PROFIT SET: ${tp:.2f}\n")
             except Exception as e:
-                print(f"[EXECUTION ERROR] {e}")
+                print(f"Order Error: {e}")
 
     async def start(self):
         print(">>> STARTING ULTRA-FAST AGGRESSIVE MODE...")
         while True:
             await self.get_stats()
             await self.run_optimized_scanner()
-            await asyncio.sleep(5) 
+            await asyncio.sleep(10) 
 
 if __name__ == "__main__":
     bot = OmniQuantumAlpha()
