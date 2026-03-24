@@ -11,28 +11,26 @@ class OmniQuantumAlpha:
         self.base_url = "https://paper-api.alpaca.markets" 
         self.api = tradeapi.REST(self.api_key, self.secret_key, self.base_url, api_version='v2')
         
-        # AGGRESSIVE STRATEGY PARAMETERS
+        # PARAMETERS
         self.risk_per_trade = 0.20
         self.min_gap = 4.0
         self.min_profit = 0.015
-        self.scan_limit = 200 # TARGETING TOP 200 VOLATILE ASSETS
+        self.scan_limit = 200 
 
     def log_protocol(self):
         print("\n" + "!"*60)
         print(">>> PROTOCOL: SURVIVE OR TERMINATE")
-        print(">>> MODE: AGGRESSIVE QUANTUM SCALPING")
-        print(">>> SCANNING TOP 200 VOLATILE STOCKS")
+        print(">>> MONITORING TOP 200 ASSETS FOR GAP > 4%")
         print("!"*60 + "\n")
 
     async def get_stats(self):
         acc = self.api.get_account()
         print(f"\n[VITAL SIGNS] Equity: ${acc.equity} | Power: ${acc.buying_power}")
-        print(f"Time: {datetime.now().strftime('%H:%M:%S')} | Status: {acc.status}")
+        print(f"Time: {datetime.now().strftime('%H:%M:%S')} | Status: ACTIVE")
 
     async def run_scanner(self):
-        print(f"--- [SCANNING TOP {self.scan_limit} ASSETS] ---")
+        print(f"--- [LIVE MARKET SCAN: TOP 200] ---")
         assets = self.api.list_assets(status='active', asset_class='us_equity')
-        # Dynamic selection of 200 tradable stocks
         watchlist = [a.symbol for a in assets if a.tradable and a.shortable][:self.scan_limit]
         
         for symbol in watchlist:
@@ -43,10 +41,10 @@ class OmniQuantumAlpha:
                 curr_price = self.api.get_latest_trade(symbol).price
                 gap_pct = ((curr_price - prev_close) / prev_close) * 100
                 
-                # Screen Activity Output
-                if gap_pct > 1.0:
-                    status = "!!! TARGET !!!" if gap_pct >= self.min_gap else ""
-                    print(f"S: {symbol:6} | Gap: {gap_pct:6.2f}% | {status}")
+                # VISUAL MONITORING: Show everything with movement > 0.5%
+                if gap_pct >= 0.5:
+                    status = "[[ TARGET HIT ]]" if gap_pct >= self.min_gap else "[ Below 4% - No Buy ]"
+                    print(f"SYMBOL: {symbol:6} | GAP: {gap_pct:6.2f}% | {status}")
 
                 if gap_pct >= self.min_gap:
                     await self.execute_trade(symbol, curr_price)
@@ -59,12 +57,12 @@ class OmniQuantumAlpha:
         qty = (cash * self.risk_per_trade) // price
         if qty > 0:
             print("\n" + "*"*60)
-            print(f"[*] EXECUTION: {symbol} | QTY: {qty} | PRICE: ${price}")
+            print(f"[*] TRADE TRIGGERED: {symbol} | PRICE: ${price}")
             try:
                 self.api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc', extended_hours=True)
                 tp = price * (1 + self.min_profit)
                 self.api.submit_order(symbol=symbol, qty=qty, side='sell', type='limit', limit_price=tp, time_in_force='gtc', extended_hours=True)
-                print(f"[LOG] SELL LIMIT SET AT: ${tp:.2f}")
+                print(f"[LOG] BUY ORDER DONE | SELL LIMIT SET AT: ${tp:.2f}")
                 print("*"*60 + "\n")
             except Exception as e:
                 print(f"[ERROR] {e}")
@@ -74,7 +72,7 @@ class OmniQuantumAlpha:
         while True:
             await self.get_stats()
             await self.run_scanner()
-            print("\nScanning Cycle Complete. Re-engaging in 30s...")
+            print("\nCycle Finished. Waiting 30s to avoid API rate limits...")
             await asyncio.sleep(30)
 
 if __name__ == "__main__":
