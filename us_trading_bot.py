@@ -12,36 +12,48 @@ class OmniQuantumAlpha:
         
         self.risk_per_trade = 0.20
         self.min_gap = 4.0
-        self.min_profit = 0.015  # 1.5% Profit
-        self.stop_loss = 0.02    # 2% Stop Loss
+        self.min_profit = 0.015
+        self.stop_loss = 0.02
         self.max_price = 50.0
         self.scan_limit = 150 
 
     async def get_stats(self):
-        acc = self.api.get_account()
-        print("\n" + "="*60)
-        print(f" SAFE AGGRESSIVE MONITOR | {datetime.now().strftime('%H:%M:%S')}")
-        print(f" EQUITY: ${acc.equity} | POWER: ${acc.buying_power}")
-        print("="*60)
+        try:
+            acc = self.api.get_account()
+            print("\n" + "="*60)
+            print(f" SAFE AGGRESSIVE MONITOR | {datetime.now().strftime('%H:%M:%S')}")
+            print(f" EQUITY: ${acc.equity} | POWER: ${acc.buying_power}")
+            print("="*60)
+        except Exception as e:
+            print(f"Stats Error: {e}")
 
     async def run_hybrid_scanner(self):
         print(f"{'SYMBOL':<10} | {'PRICE':<10} | {'D-GAP%':<8} | {'1H-GAP%':<8} | {'STATUS'}")
         print("-" * 65)
         
         try:
+            # Step 1: Filter active US equities
             assets = self.api.list_assets(status='active', asset_class='us_equity')
             symbols = [a.symbol for a in assets if a.tradable and a.shortable]
+            
+            # Step 2: Get snapshots to find volatile stocks
             snapshots = self.api.get_snapshots(symbols[:1000])
             
             volatile_pool = []
             for symbol, snap in snapshots.items():
-                if snap.latest_quote.askprice > 0 and snap.latest_quote.askprice <= self.max_price:
-                    change = abs(snap.daily_bar.c - snap.prev_daily_bar.c) / snap.prev_daily_bar.c if snap.prev_daily_bar else 0
-                    volatile_pool.append((symbol, change))
+                try:
+                    # FIX: Correct way to access price in Alpaca Snapshots
+                    price = snap.latest_quote.ap if hasattr(snap.latest_quote, 'ap') else snap.daily_bar.c
+                    if 0 < price <= self.max_price:
+                        change = abs(snap.daily_bar.c - snap.prev_daily_bar.c) / snap.prev_daily_bar.c if snap.prev_daily_bar else 0
+                        volatile_pool.append((symbol, change, price))
+                except: continue
             
+            # Sort by volatility
             volatile_pool.sort(key=lambda x: x[1], reverse=True)
             watchlist = [x[0] for x in volatile_pool[:self.scan_limit]]
             
+            # Batch request for precision
             all_daily_bars = self.api.get_bars(watchlist, '1Day', limit=2).df
             all_hourly_bars = self.api.get_bars(watchlist, '1Hour', limit=1).df
             latest_quotes = self.api.get_latest_quotes(watchlist)
@@ -55,7 +67,8 @@ class OmniQuantumAlpha:
                     
                     prev_close = d_bars['close'].iloc[-2]
                     hour_open = h_bars['open'].iloc[-1]
-                    curr_price = latest_quotes[symbol].askprice
+                    # FIX: Access ask price safely
+                    curr_price = latest_quotes[symbol].askprice if hasattr(latest_quotes[symbol], 'askprice') else latest_quotes[symbol].ap
                     
                     if curr_price <= 0: continue
 
@@ -72,29 +85,24 @@ class OmniQuantumAlpha:
                             await self.execute_trade(symbol, curr_price)
                 except: continue
         except Exception as e:
-            print(f"Scan Error: {e}")
+            print(f"Detailed Scan Error: {e}")
 
     async def execute_trade(self, symbol, price):
-        acc = self.api.get_account()
-        qty = (float(acc.cash) * self.risk_per_trade) // price
-        if qty > 0:
-            print(f"\n>>> [ORDER] BUYING {symbol} AT ${price}")
-            try:
-                # Submit Market Buy Order
+        try:
+            acc = self.api.get_account()
+            qty = (float(acc.cash) * self.risk_per_trade) // price
+            if qty > 0:
+                print(f"\n>>> [ORDER] BUYING {symbol} AT ${price}")
                 self.api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc', extended_hours=True)
                 
-                # OCO-like protection (Bracket Order Logic)
                 tp_price = round(price * (1 + self.min_profit), 2)
                 sl_price = round(price * (1 - self.stop_loss), 2)
                 
-                # Submit Take Profit
                 self.api.submit_order(symbol=symbol, qty=qty, side='sell', type='limit', limit_price=tp_price, time_in_force='gtc', extended_hours=True)
-                # Submit Stop Loss
                 self.api.submit_order(symbol=symbol, qty=qty, side='sell', type='stop', stop_price=sl_price, time_in_force='gtc', extended_hours=True)
-                
                 print(f">>> [PROTECTION] TP: ${tp_price} | SL: ${sl_price}\n")
-            except Exception as e:
-                print(f"Order Error: {e}")
+        except Exception as e:
+            print(f"Order Execution Error: {e}")
 
     async def start(self):
         while True:
