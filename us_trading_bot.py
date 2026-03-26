@@ -70,7 +70,7 @@ class BinanceBeastUS:
                     except:
                         continue
 
-                print(f"[LOOP {current_time}] Scanned {len(symbols)} symbols | {len(candidates)} qualified by liquidity.")
+                print(f"[LOOP {current_time}] Scanned {len(symbols)} symbols | {len(candidates)} qualified.")
 
                 candidates.sort(key=lambda x: x[1], reverse=True)
                 watchlist = [x[0] for x in candidates[:self.max_assets]]
