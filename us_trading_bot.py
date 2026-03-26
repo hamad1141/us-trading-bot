@@ -50,11 +50,9 @@ class BinanceBeastUS:
         print("-" * 75)
         
         while True:
-            # --- Diagnostic Print to Track Loop Health ---
             print(f"[LOOP] {datetime.now().strftime('%H:%M:%S')}")
 
             try:
-                # 1. Broad Market Screen
                 assets = self.api.list_assets(status='active', asset_class='us_equity')
                 symbols = [a.symbol for a in assets if a.tradable and a.shortable][:1000]
                 
@@ -63,8 +61,12 @@ class BinanceBeastUS:
                 
                 for symbol, snap in snapshots.items():
                     try:
-                        if not snap or not hasattr(snap, 'latest_quote') or not hasattr(snap, 'daily_bar'): continue
-                        price = snap.latest_quote.ap if snap.latest_quote.ap > 0 else snap.daily_bar.c
+                        # --- SAFE CHECK MODIFICATION (AS REQUESTED) ---
+                        if snap is None or snap.latest_quote is None or snap.daily_bar is None:
+                            continue
+                        # -----------------------------------------------
+
+                        price = snap.latest_quote.ap if (snap.latest_quote.ap and snap.latest_quote.ap > 0) else snap.daily_bar.c
                         volume_usd = snap.daily_bar.v * price
                         
                         if 0 < price <= self.max_price and volume_usd >= self.min_volume_limit:
@@ -81,7 +83,6 @@ class BinanceBeastUS:
                     sys.stdout.write(f"\r[SCANNING] Monitoring market for $3M+ liquidity assets...")
                     sys.stdout.flush()
                 else:
-                    # 2. Deep Technical Analysis
                     bars_15m = self.api.get_bars(watchlist, '15Min', limit=30).df
                     latest_quotes = self.api.get_latest_quotes(watchlist)
 
@@ -92,7 +93,12 @@ class BinanceBeastUS:
                             
                             closes = df['close'].tolist()
                             avg_price = df['close'].mean()
-                            curr_price = latest_quotes[symbol].askprice or latest_quotes[symbol].ap
+                            
+                            # Double check quote existence before analysis
+                            if symbol not in latest_quotes or latest_quotes[symbol] is None:
+                                continue
+
+                            curr_price = latest_quotes[symbol].askprice or latest_quotes[symbol].ap or closes[-1]
                             
                             gap = (avg_price - curr_price) / avg_price
                             rsi = self.calculate_rsi(closes)
@@ -123,7 +129,6 @@ class BinanceBeastUS:
             if any(p.symbol == symbol for p in pos): return
 
             acc = self.api.get_account()
-            # Calculate Qty based on Available Cash for Paper Trading
             available_cash = float(acc.cash)
             qty = (available_cash * self.risk_per_trade) // price
             
