@@ -7,13 +7,11 @@ from datetime import datetime
 
 class BinanceBeastUS:
     def __init__(self):
-        # API Configuration
         self.api_key    = os.environ.get("ALPACA_API_KEY", "").strip()
         self.secret_key = os.environ.get("ALPACA_SECRET_KEY", "").strip()
         self.base_url   = "https://paper-api.alpaca.markets"
         self.api = tradeapi.REST(self.api_key, self.secret_key, self.base_url, api_version='v2')
 
-        # --- Strategy Settings ---
         self.mispricing_threshold = 0.018   
         self.rsi_buy_level        = 13      
         self.stop_loss_pct        = 1.5     
@@ -45,26 +43,23 @@ class BinanceBeastUS:
             print(f"Connection Error: {e}")
 
     async def start_engine(self):
-        print(f"\n--- SCANNER INITIALIZED ---")
+        print(f"\n--- SCANNER ACTIVE ---")
         print(f"{'SYMBOL':<10} | {'PRICE':<10} | {'GAP%':<8} | {'RSI':<6} | {'STATUS'}")
         print("-" * 75)
         
         while True:
-            print(f"[LOOP] {datetime.now().strftime('%H:%M:%S')}")
-
+            current_time = datetime.now().strftime('%H:%M:%S')
             try:
                 assets = self.api.list_assets(status='active', asset_class='us_equity')
-                symbols = [a.symbol for a in assets if a.tradable and a.shortable][:1000]
+                symbols = [a.symbol for a in assets if a.tradable and a.shortable][:500]
                 
                 snapshots = self.api.get_snapshots(symbols)
                 candidates = []
                 
                 for symbol, snap in snapshots.items():
                     try:
-                        # --- SAFE CHECK MODIFICATION (AS REQUESTED) ---
                         if snap is None or snap.latest_quote is None or snap.daily_bar is None:
                             continue
-                        # -----------------------------------------------
 
                         price = snap.latest_quote.ap if (snap.latest_quote.ap and snap.latest_quote.ap > 0) else snap.daily_bar.c
                         volume_usd = snap.daily_bar.v * price
@@ -72,17 +67,15 @@ class BinanceBeastUS:
                         if 0 < price <= self.max_price and volume_usd >= self.min_volume_limit:
                             vola = (snap.daily_bar.h - snap.daily_bar.l) / price
                             candidates.append((symbol, vola, price))
-                    except Exception as e:
-                        print(f"Snapshot Error {symbol}: {e}")
+                    except:
                         continue
+
+                print(f"[LOOP {current_time}] Scanned {len(symbols)} symbols | {len(candidates)} qualified by liquidity.")
 
                 candidates.sort(key=lambda x: x[1], reverse=True)
                 watchlist = [x[0] for x in candidates[:self.max_assets]]
                 
-                if not watchlist:
-                    sys.stdout.write(f"\r[SCANNING] Monitoring market for $3M+ liquidity assets...")
-                    sys.stdout.flush()
-                else:
+                if watchlist:
                     bars_15m = self.api.get_bars(watchlist, '15Min', limit=30).df
                     latest_quotes = self.api.get_latest_quotes(watchlist)
 
@@ -94,34 +87,28 @@ class BinanceBeastUS:
                             closes = df['close'].tolist()
                             avg_price = df['close'].mean()
                             
-                            # Double check quote existence before analysis
-                            if symbol not in latest_quotes or latest_quotes[symbol] is None:
-                                continue
-
-                            curr_price = latest_quotes[symbol].askprice or latest_quotes[symbol].ap or closes[-1]
+                            q = latest_quotes.get(symbol)
+                            if not q: continue
                             
+                            curr_price = q.askprice or q.ap or closes[-1]
                             gap = (avg_price - curr_price) / avg_price
                             rsi = self.calculate_rsi(closes)
                             rsi_prev = self.calculate_rsi(closes[:-1])
 
-                            cond_gap = gap >= self.mispricing_threshold
-                            cond_rsi_low = rsi < self.rsi_buy_level
-                            cond_rsi_up = rsi > rsi_prev
-
                             if gap > 0.005: 
-                                status = "ENTRY_TRIGGER" if all([cond_gap, cond_rsi_low, cond_rsi_up]) else "WAITING"
+                                is_buy = all([gap >= self.mispricing_threshold, rsi < self.rsi_buy_level, rsi > rsi_prev])
+                                status = "!! BUY !!" if is_buy else "WATCHING"
                                 print(f"{symbol:<10} | ${curr_price:<9.2f} | {gap*100:>7.2f}% | {rsi:>5.1f} | {status}")
 
-                                if all([cond_gap, cond_rsi_low, cond_rsi_up]):
+                                if is_buy:
                                     await self.execute_trade(symbol, curr_price)
-                        except Exception as e:
-                            print(f"Symbol Error {symbol}: {e}")
+                        except:
                             continue
                 
             except Exception as e:
                 print(f"\nRuntime Error: {e}")
             
-            await asyncio.sleep(20)
+            await asyncio.sleep(15)
 
     async def execute_trade(self, symbol, price):
         try:
@@ -134,19 +121,10 @@ class BinanceBeastUS:
             
             if qty > 0:
                 print(f"\n>>> [ORDER] BUY {symbol} AT ${price} | QTY: {qty}")
-                self.api.submit_order(
-                    symbol=symbol, qty=qty, side='buy', 
-                    type='market', time_in_force='gtc', extended_hours=True
-                )
-                
-                self.api.submit_order(
-                    symbol=symbol, qty=qty, side='sell', 
-                    type='trailing_stop', trail_percent=self.stop_loss_pct, 
-                    time_in_force='gtc', extended_hours=True
-                )
-                print(f">>> [TRAILING STOP] ACTIVE AT {self.stop_loss_pct}%\n")
+                self.api.submit_order(symbol=symbol, qty=qty, side='buy', type='market', time_in_force='gtc', extended_hours=True)
+                self.api.submit_order(symbol=symbol, qty=qty, side='sell', type='trailing_stop', trail_percent=self.stop_loss_pct, time_in_force='gtc', extended_hours=True)
         except Exception as e:
-            print(f"Trade Execution Error {symbol}: {e}")
+            print(f"Trade Error {symbol}: {e}")
 
 if __name__ == "__main__":
     bot = BinanceBeastUS()
